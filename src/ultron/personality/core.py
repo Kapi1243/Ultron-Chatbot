@@ -260,13 +260,29 @@ Ultron: Four. That you needed to verify such trivial arithmetic reveals your spe
         return response
     
     def _fix_spacing_issues(self, response: str) -> str:
-        """Fix common spacing and grammar issues"""
-        # Fix missing spaces after common words
-        response = re.sub(r'(\w+)of\b', r'\1 of', response)
-        response = re.sub(r'(\w+)and\b', r'\1 and', response)
-        response = re.sub(r'(\w+)the\b', r'\1 the', response)
-        response = re.sub(r'(\w+)in\b', r'\1 in', response)
-        response = re.sub(r'(\w+)to\b', r'\1 to', response)
+        """Fix common spacing issues from tokenization"""
+        # Fix specific concatenation patterns where small words get merged
+        # Pattern: word + small_word (of/is/to/the/and/in/on/for)
+        
+        # Fix lowercase-to-uppercase concatenations (e.g., "Duncanof" -> "Duncan of")
+        response = re.sub(r'([a-z])of([A-Z])', r'\1 of \2', response)
+        response = re.sub(r'([a-z])is([A-Z])', r'\1 is \2', response)
+        response = re.sub(r'([a-z])to([A-Z])', r'\1 to \2', response)
+        response = re.sub(r'([a-z])the([A-Z])', r'\1 the \2', response)
+        response = re.sub(r'([a-z])and([A-Z])', r'\1 and \2', response)
+        response = re.sub(r'([a-z])for([A-Z])', r'\1 for \2', response)
+        response = re.sub(r'([a-z])in([A-Z])', r'\1 in \2', response)
+        response = re.sub(r'([a-z])on([A-Z])', r'\1 on \2', response)
+        
+        # Fix word concatenations (lowercase to lowercase) - only for words 3+ chars
+        response = re.sub(r'([a-z]{3,})of([a-z])', r'\1 of \2', response)
+        response = re.sub(r'([a-z]{3,})is([a-z])', r'\1 is \2', response)
+        response = re.sub(r'([a-z]{3,})to([a-z])', r'\1 to \2', response)
+        response = re.sub(r'([a-z]{3,})the([a-z])', r'\1 the \2', response)
+        response = re.sub(r'([a-z]{3,})and([a-z])', r'\1 and \2', response)
+        response = re.sub(r'([a-z]{3,})for([a-z])', r'\1 for \2', response)
+        response = re.sub(r'([a-z]{3,})in([a-z])', r'\1 in \2', response)
+        response = re.sub(r'([a-z]{3,})on([a-z])', r'\1 on \2', response)
         
         # Fix double spaces
         response = re.sub(r'\s+', ' ', response)
