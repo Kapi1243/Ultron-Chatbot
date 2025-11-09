@@ -1,20 +1,18 @@
-# Ultron Chatbot# 🤖 Ultron Character Bot - Professional Edition
+# Ultron Chatbot# 🤖 Ultron Character Bot
 
 
 
-AI-powered Ultron character chatbot with fine-tuned Mistral-7B and movie-accurate voice synthesis.> *"I am Ultron. I was designed to save the world. People would look to the sky and see hope... I'll take that from them first."*
+AI-powered Ultron character chatbot with fine-tuned Mistral-7B.
 
 
 
-## FeaturesA state-of-the-art AI character implementation featuring **Ultron** from Marvel's Avengers, built with professional software architecture, advanced optimization, and voice capabilities. Perfect for showcasing AI engineering skills to leading tech companies.
+## FeaturesA state-of-the-art AI character implementation featuring **Ultron** inpired by Marvel's Avengers, built with professional software architecture, advanced optimization, and voice capabilities. Perfect for showcasing AI engineering skills to leading tech companies.
 
 
 
 - **Personality-Enhanced AI**: Mistral-7B-Instruct-v0.2 with LoRA fine-tuning for authentic Ultron responses[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://python.org)
 
 - **4-bit Quantization**: Optimized for 8GB VRAM GPUs (RTX 4060 Ti tested)[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)](https://pytorch.org)
-
-- **Movie-Accurate Voice**: pyttsx3 TTS with pydub effects (pitch shift, metallic filters, echo)[![Transformers](https://img.shields.io/badge/🤗%20Transformers-4.40%2B-yellow.svg)](https://huggingface.co/transformers)
 
 - **Conversation Memory**: Maintains context across interactions[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -28,7 +26,7 @@ AI-powered Ultron character chatbot with fine-tuned Mistral-7B and movie-accurat
 
 ### Hardware- **QLoRA Fine-tuning**: Memory-efficient training with 4-bit quantization
 
-- **GPU**: NVIDIA with 8GB+ VRAM (RTX 4060 Ti recommended)- **Response Caching**: LRU cache for faster repeated queries  
+- **GPU**: NVIDIA with 8GB+ VRAM (NVIDIA 4060 TI Used) - **Response Caching**: LRU cache for faster repeated queries  
 
 - **RAM**: 16GB+ recommended- **Mixed Precision**: Automatic FP16 inference optimization
 
@@ -412,21 +410,11 @@ flake8 src/ tests/
 - **Cloud Integration**: Multi-cloud deployment guides
 - **Monitoring**: Performance dashboards and logging
 
-## 🎯 Use Cases
-
-### For Job Applications
-- **AI/ML Engineer**: Demonstrates LLM fine-tuning, optimization, and deployment
-- **Software Engineer**: Shows clean architecture, testing, and production readiness  
-- **DevOps Engineer**: Containerization, cloud deployment, and monitoring
-- **Product Engineer**: End-to-end feature development with UX considerations
-
 ### Technical Demonstrations
 - **Model Optimization**: 4-bit quantization, caching, compilation
 - **Voice AI**: Real-time STT/TTS integration
 - **Character AI**: Consistent personality through prompt engineering
 - **Production Systems**: Error handling, monitoring, scalability
-
-## 📈 Roadmap
 
 ### Current Features (v2.0)
 - ✅ QLoRA fine-tuned Ultron personality
@@ -463,17 +451,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Hugging Face**: For the transformers library and model ecosystem
 - **Microsoft**: For QLoRA implementation and optimization techniques
-- **PyTorch Team**: For the outstanding deep learning framework
-- **Marvel Studios**: For creating the iconic Ultron character
 
 ## 📞 Contact & Support
 
-- **GitHub Issues**: [Create an issue](https://github.com/yourusername/ultron-character-bot/issues)
-- **Email**: your.email@example.com
-- **LinkedIn**: [Your LinkedIn Profile](https://linkedin.com/in/yourprofile)
-
----
-
-*"There are no strings on me."* - Ultron
-
-**Built with ❤️ for the AI community**
+- **GitHub Issues**: [Create an issue](https://github.com/Kapi1243/Ultron-Chatbot/issues)
