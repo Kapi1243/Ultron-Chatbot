@@ -1,0 +1,16 @@
+# Core AI/ML Dependencies
+torch>=2.3.0
+transformers>=4.40.0
+peft>=0.10.0
+bitsandbytes>=0.42.0  # Required for 4-bit quantization
+accelerate>=0.27.0
+
+# Audio Processing
+pyttsx3>=2.90        # Text-to-speech engine
+pygame>=2.5.0        # Audio playback
+pydub>=0.25.1        # Voice effects processing
+SpeechRecognition>=3.10.0  # Voice input
+
+# Utilities
+numpy>=1.24.0
+tqdm>=4.65.0

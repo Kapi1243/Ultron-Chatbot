@@ -1,0 +1,522 @@
+"""
+UltronModel: Optimized model loader and inference engine
+Handles 4-bit quantization, LoRA adapter loading, and text generation
+"""
+
+import torch
+import os
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
+from peft import PeftModel, PeftConfig
+import logging
+from functools import lru_cache
+import time
+from typing import Optional, Dict, Any, Tuple
+import gc
+
+
+class UltronModel:
+    """
+    Optimized model loader and inference engine for Ultron
+    """
+    
+    def __init__(self, model_path: str, config: Dict[str, Any]):
+        self.model_path = model_path
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model: Optional[AutoModelForCausalLM] = None
+        self.tokenizer: Optional[AutoTokenizer] = None
+        self.logger = logging.getLogger(__name__)
+        
+    def load_model(self) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
+        """Load and optimize the model"""
+        if self.model is not None and self.tokenizer is not None:
+            return self.model, self.tokenizer
+            
+        self.logger.info("🤖 Loading Ultron model...")
+        start_time = time.time()
+        
+        # Determine if model_path is a PEFT adapter directory; if so, derive base model path
+        adapter_detected = False
+        base_model_path = self.model_path
+        try:
+            peft_cfg = PeftConfig.from_pretrained(self.model_path)
+            # If this succeeds, model_path likely points to adapters; use base from config
+            if hasattr(peft_cfg, 'base_model_name_or_path') and peft_cfg.base_model_name_or_path:
+                base_model_path = peft_cfg.base_model_name_or_path
+                adapter_detected = True
+                self.logger.info(f"🔌 Detected LoRA adapter; base model: {base_model_path}")
+        except Exception:
+            # No adapter config at top-level; continue with provided path
+            pass
+
+    # If adapter detected, allow local base model override via config or common folders
+        if adapter_detected:
+            # Explicit override
+            override = self.config.get('base_model_path') or self.config.get('model_base_path')
+            if override and os.path.exists(override):
+                self.logger.info(f"📦 Using local base model override: {override}")
+                base_model_path = override
+            else:
+                # Try common local locations matching the repo structure
+                candidates = []
+                try:
+                    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+                    last_seg = os.path.basename(base_model_path)
+                    for rel in [
+                        os.path.join(repo_root, 'models', last_seg),
+                        os.path.join(repo_root, last_seg),
+                        os.path.join(repo_root, 'ultron_model_base'),
+                    ]:
+                        candidates.append(rel)
+                except Exception:
+                    pass
+                for cand in candidates:
+                    if cand and os.path.exists(cand) and os.path.isfile(os.path.join(cand, 'config.json')):
+                        self.logger.info(f"📂 Found local base model candidate: {cand}")
+                        base_model_path = cand
+                        break
+
+        # Load tokenizer from base (ensures full vocab)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+        except Exception as e:
+            # If base model is remote (e.g., mistralai/*) and no internet/credentials are available, raise a clear error
+            self.logger.error(f"Tokenizer load failed from '{base_model_path}': {e}")
+            raise RuntimeError(
+                "Base model not found locally. Since you're on Windows/CPU and working offline, please download the base model "
+                "to a local folder and set 'base_model_path' in config, or place it under the repo (e.g., .\\models\\Mistral-7B-Instruct-v0.2)."
+            )
+        
+        # CRITICAL FIX: Force unk_token to be non-zero IMMEDIATELY (prevents tokenizer from producing 0s)
+        if self.tokenizer.unk_token_id == 0 or self.tokenizer.unk_token_id is None:
+            self.logger.warning(f"⚠️ unk_token_id is {self.tokenizer.unk_token_id}! Forcing to eos_token BEFORE any tokenization.")
+            self.tokenizer.unk_token = self.tokenizer.eos_token
+            self.tokenizer.unk_token_id = self.tokenizer.eos_token_id
+            
+        # Fix tokenizer configuration - ensure pad_token is properly set
+        # For 8-bit quantization, use eos_token as pad_token (standard practice)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+            self.logger.info(f"✓ Set pad_token to eos_token (ID: {self.tokenizer.pad_token_id})")
+            
+        # Set padding side to left for better generation
+        self.tokenizer.padding_side = 'left'
+        
+        # CRITICAL: Fix bos_token if it's None or 0
+        if self.tokenizer.bos_token_id is None or self.tokenizer.bos_token_id == 0:
+            self.logger.warning(f"⚠️ bos_token_id is {self.tokenizer.bos_token_id}! Setting to eos_token_id")
+            self.tokenizer.bos_token = self.tokenizer.eos_token
+            self.tokenizer.bos_token_id = self.tokenizer.eos_token_id
+        
+        # Validate configuration
+        if self.tokenizer.pad_token_id == 0:
+            self.logger.error("❌ pad_token_id is 0! This will cause CUDA errors.")
+            raise ValueError("pad_token_id cannot be 0 for 8-bit quantization")
+        
+        # Log tokenizer configuration for debugging
+        self.logger.info(f"Token IDs - pad: {self.tokenizer.pad_token_id}, eos: {self.tokenizer.eos_token_id}, unk: {self.tokenizer.unk_token_id}, bos: {self.tokenizer.bos_token_id}")
+            
+        # Quantization configuration - support both 4-bit and 8-bit
+        use_8bit = self.config.get('load_in_8bit', False) and torch.cuda.is_available()
+        use_4bit = self.config.get('load_in_4bit', False) and torch.cuda.is_available()
+        quantization_config = None
+        
+        if use_4bit:
+            try:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_use_double_quant=self.config.get('use_double_quant', True),
+                    bnb_4bit_quant_type=self.config.get('quant_type', 'nf4'),
+                    bnb_4bit_compute_dtype=torch.float16
+                )
+                self.logger.info("✅ Using 4-bit (NF4) quantization for 8GB VRAM")
+            except Exception as e:
+                self.logger.warning(f"4-bit quantization not available: {e}")
+                quantization_config = None
+                use_4bit = False
+        elif use_8bit:
+            try:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_threshold=6.0,
+                    llm_int8_has_fp16_weight=False,
+                    llm_int8_enable_fp32_cpu_offload=True  # CRITICAL: Enable CPU offload for 8GB VRAM
+                )
+                self.logger.info("✅ Using 8-bit quantization with CPU offload for 8GB VRAM")
+            except Exception as e:
+                self.logger.warning(f"8-bit quantization not available, falling back to standard load: {e}")
+                quantization_config = None
+                use_8bit = False
+        
+        try:
+            # Load base model with fallback attention implementation
+            attn_impl = "eager"  # Safe default
+            if torch.cuda.is_available() and self.config.get('use_flash_attention', False):
+                try:
+                    # Try flash attention if explicitly requested and available
+                    attn_impl = "flash_attention_2"
+                except ImportError:
+                    attn_impl = "eager"
+
+            # Choose dtype and device map based on availability
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            model_kwargs = dict(
+                torch_dtype=dtype,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                attn_implementation=attn_impl
+            )
+            if torch.cuda.is_available():
+                # 4-bit quantization is efficient enough to run fully on GPU
+                if use_4bit:
+                    # Run everything on GPU - no CPU offloading needed with 4-bit!
+                    model_kwargs["device_map"] = {"": 0}  # Force all layers to GPU:0
+                    self.logger.info("📊 Running 4-bit model fully on GPU (no CPU offload)")
+                elif use_8bit:
+                    # 8-bit needs careful memory management
+                    model_kwargs["device_map"] = "balanced"
+                    model_kwargs["max_memory"] = {0: "7GiB", "cpu": "16GiB"}
+                    self.logger.info("📊 Using balanced device_map with 7GB max VRAM for 8-bit quantization")
+                else:
+                    # Standard auto mapping for other cases
+                    model_kwargs["device_map"] = "auto"
+            else:
+                model_kwargs["device_map"] = "cpu"
+            # Optional offload dir for accelerate when sharding on CPU/disk
+            offload_dir = self.config.get('offload_dir') or self.config.get('offload_folder')
+            if offload_dir:
+                try:
+                    os.makedirs(offload_dir, exist_ok=True)
+                except Exception:
+                    pass
+                model_kwargs["offload_folder"] = offload_dir
+            if quantization_config is not None:
+                model_kwargs["quantization_config"] = quantization_config
+            else:
+                # If not using 4-bit, ensure use_cache True for better inference unless explicitly disabled
+                model_kwargs["use_cache"] = True
+
+            # Force use of safetensors to avoid PyTorch version compatibility issues
+            self.model = AutoModelForCausalLM.from_pretrained(
+                base_model_path,
+                use_safetensors=True,
+                **model_kwargs
+            )
+            
+            # Load PEFT adapter if available
+            peft_config = None
+            adapter_path = None
+            # If we already detected adapter earlier, prefer that directory
+            if adapter_detected:
+                try:
+                    peft_config = PeftConfig.from_pretrained(self.model_path)
+                    adapter_path = self.model_path
+                except Exception as e:
+                    self.logger.warning(f"Adapter config disappeared? {e}")
+            else:
+                # Try common locations for adapters
+                for candidate in [self.model_path, os.path.join(self.model_path, "ultron_model")]:
+                    try:
+                        peft_config = PeftConfig.from_pretrained(candidate)
+                        adapter_path = candidate
+                        break
+                    except Exception:
+                        continue
+
+            if peft_config and adapter_path:
+                try:
+                    self.model = PeftModel.from_pretrained(self.model, adapter_path)
+                    self.logger.info("✅ LoRA adapters loaded successfully")
+                except Exception as e:
+                    self.logger.warning(f"Failed to attach LoRA adapters: {e}")
+            else:
+                self.logger.info("ℹ️ No LoRA adapters detected. Using base model only.")
+                
+            self.model.eval()
+            self._ensure_model_device_alignment(use_4bit or use_8bit)
+            
+            # Disable model compilation for quantized models (causes CUDA errors)
+            if (hasattr(torch, 'compile') and 
+                torch.cuda.is_available() and 
+                self.config.get('enable_compilation', True) and 
+                not use_8bit and not use_4bit):
+                try:
+                    self.model = torch.compile(self.model, mode="reduce-overhead", dynamic=True)
+                    self.logger.info("🚀 Model compiled for optimization")
+                except Exception as e:
+                    self.logger.warning(f"Model compilation failed: {e}")
+            elif use_8bit or use_4bit:
+                quant_type = "8-bit" if use_8bit else "4-bit"
+                self.logger.info(f"ℹ️ Compilation disabled for {quant_type} quantization (prevents CUDA errors)")
+                    
+            load_time = time.time() - start_time
+            self.logger.info(f"✅ Model loaded in {load_time:.2f} seconds")
+            
+            # Clear memory
+            self._clear_memory()
+            
+            return self.model, self.tokenizer
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to load model: {str(e)}")
+            raise e
+            
+    def generate_response(self, 
+                         prompt: str, 
+                         max_tokens: int = 150,
+                         temperature: float = 0.7,
+                         top_p: float = 0.9,
+                         timeout: float = 30.0) -> str:
+        """Generate a response using the loaded model with timeout protection"""
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+            
+        self.logger.info(f"🎯 Generating response (max_tokens={max_tokens}, timeout={timeout}s)...")
+        self.logger.info(f"📝 Full prompt:\n{prompt}\n{'='*50}")
+            
+        # Tokenize input - disable padding for single inputs to avoid CUDA errors with 8-bit
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=1800,  # Leave room for generation
+            add_special_tokens=True,
+            padding=False  # Explicitly disable padding
+        )
+        
+        # Validate input_ids - no zeros allowed for quantization
+        input_ids = inputs['input_ids']
+        
+        if (input_ids == 0).any():
+            # Replace any 0s with eos_token_id
+            input_ids = torch.where(input_ids == 0, self.tokenizer.eos_token_id, input_ids)
+            inputs['input_ids'] = input_ids
+        
+        # Create attention_mask manually (all 1s since no padding)
+        attention_mask = torch.ones_like(input_ids)
+        inputs['attention_mask'] = attention_mask
+        
+        self.logger.info(f"🔢 Tokenized to {inputs['input_ids'].shape[1]} tokens")
+        
+        # Move to the correct device: for sharded models, place inputs on the embedding device
+        input_device = self._infer_input_device()
+        inputs = {k: v.to(input_device) for k, v in inputs.items()}
+            
+        start_time = time.time()
+        
+        # Optimize generation settings for faster response
+        # Build stopping criteria to halt when turn switches or unwanted markers appear
+        stopping = self._build_stopping_criteria()
+
+        # Determine a sensible hard cap for new tokens
+        gpu = (input_device.type == 'cuda')
+        hard_cap = 200 if gpu else 120
+        # Allow override via config if provided
+        try:
+            cfg_cap = int(self.config.get('hard_max_new_tokens', 0))
+            if cfg_cap > 0:
+                hard_cap = cfg_cap
+        except Exception:
+            pass
+
+        # Ensure we have a reasonable minimum for max_new_tokens
+        actual_max_tokens = max(min(max_tokens, hard_cap), 50)  # At least 50 tokens
+        
+        # CRITICAL: Pass both input_ids AND attention_mask (model needs it when pad == eos)
+        generation_kwargs = {
+            'input_ids': inputs['input_ids'],
+            'attention_mask': inputs['attention_mask'],  # Required when pad_token == eos_token
+            'max_new_tokens': actual_max_tokens,
+            'min_new_tokens': 20,  # Force at least 20 tokens to prevent single-word responses
+            'do_sample': True,
+            'temperature': temperature,
+            'top_p': top_p,
+            'top_k': 50,  # Add top_k for faster sampling
+            'no_repeat_ngram_size': 2,
+            'repetition_penalty': 1.2,
+            'pad_token_id': self.tokenizer.eos_token_id,  # Use eos_token_id (2) not unk (0)
+            'eos_token_id': self.tokenizer.eos_token_id,
+            'bos_token_id': self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else self.tokenizer.eos_token_id,
+            'use_cache': True,
+            'stopping_criteria': stopping,
+        }
+        
+        # CRITICAL CHECK: Verify all token_id parameters are non-zero
+        if generation_kwargs['pad_token_id'] == 0:
+            self.logger.error("❌ pad_token_id is 0 in generation_kwargs!")
+            raise ValueError("pad_token_id cannot be 0")
+        if generation_kwargs.get('bos_token_id') == 0:
+            self.logger.error("❌ bos_token_id is 0 in generation_kwargs!")
+            generation_kwargs['bos_token_id'] = generation_kwargs['eos_token_id']
+        
+        # FINAL VALIDATION: Check input_ids and attention_mask one more time
+        if (generation_kwargs['input_ids'] == 0).any():
+            self.logger.error("❌ ZEROS IN input_ids RIGHT BEFORE GENERATION!")
+            generation_kwargs['input_ids'] = torch.where(
+                generation_kwargs['input_ids'] == 0,
+                self.tokenizer.eos_token_id,
+                generation_kwargs['input_ids']
+            )
+        
+        if (generation_kwargs['attention_mask'] == 0).any():
+            self.logger.error("❌ ZEROS IN attention_mask! Replacing with 1s")
+            generation_kwargs['attention_mask'] = torch.ones_like(generation_kwargs['attention_mask'])
+        
+        try:
+            with torch.no_grad():
+                # CRITICAL: Don't use autocast with 8-bit quantization (causes CUDA errors)
+                # 8-bit quantization already handles mixed precision internally
+                outputs = self.model.generate(**generation_kwargs)
+        except Exception as e:
+            # Log the error and return gracefully (can't move offloaded models)
+            self.logger.error(f"❌ Generation failed: {e}")
+            return "My neural matrix encountered a critical error. The computational architecture requires recalibration."
+                
+        generation_time = time.time() - start_time
+        
+        # Check if generation took too long
+        if generation_time > timeout:
+            self.logger.warning(f"⚠️ Generation timeout ({generation_time:.1f}s > {timeout}s)")
+            return "My response systems are overloaded. Please be patient with my computational processes."
+        
+        # Extract only the new tokens (exclude the input prompt)
+        input_length = inputs['input_ids'].shape[1]
+        new_tokens = outputs[0][input_length:]
+        
+        decoded = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        
+        # Clean up the response to remove code artifacts
+        cleaned_response = self._clean_response(decoded)
+        
+        self.logger.info(f"✨ Cleaned response: '{cleaned_response}'")
+        self.logger.info(f"Generated response in {generation_time:.2f}s")
+        return cleaned_response
+
+    def _infer_input_device(self) -> torch.device:
+        """Infer the correct device for input tensors.
+        For models loaded with device_map="auto", inputs must be on the device
+        of the embedding layer. Fallback to self.device otherwise.
+        """
+        try:
+            if hasattr(self.model, 'hf_device_map') and isinstance(self.model.hf_device_map, dict):
+                # Prefer common embedding layer keys
+                for key, dev in self.model.hf_device_map.items():
+                    if any(name in key for name in ['embed_tokens', 'wte', 'tok_embeddings']):
+                        return torch.device(dev)
+                # Fallback to first device in map
+                first_dev = next(iter(self.model.hf_device_map.values()))
+                return torch.device(first_dev)
+        except Exception:
+            pass
+        return self.device
+
+    def _build_stopping_criteria(self) -> StoppingCriteriaList:
+        """Stop when model starts a new user turn or hits typical separators to reduce drift."""
+        # DISABLED: Stopping criteria might be causing CUDA errors during 8-bit generation
+        # Return empty list to avoid any custom stopping logic that could introduce zeros
+        return StoppingCriteriaList([])
+    
+    def _clean_response(self, response: str) -> str:
+        """Clean the model response to remove code artifacts and improve quality"""
+        # Remove common code patterns that appear in responses
+        code_patterns = [
+            r'\n[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*.*',  # Variable assignments
+            r'\nfunction\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(',  # Function definitions
+            r'\nclass\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\{',  # Class definitions
+            r'\n\{[^}]*\}',  # Code blocks
+            r'\n[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\(',  # Method calls
+            r'\nconsole\.[a-zA-Z]+\(',  # Console statements
+            r'\nreturn\s+.*',  # Return statements
+            r'\nif\s*\([^)]*\)\s*\{',  # If statements
+        ]
+        
+        import re
+        cleaned = response
+        
+        # Remove code patterns
+        for pattern in code_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.MULTILINE)
+        
+        # Remove lines that look like code
+        lines = cleaned.split('\n')
+        natural_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines
+            if not line:
+                continue
+            # Skip lines that look like code
+            if ('{' in line and '}' in line) or \
+               (line.startswith('function ')) or \
+               (line.startswith('class ')) or \
+               (line.startswith('var ')) or \
+               (line.startswith('let ')) or \
+               (line.startswith('const ')) or \
+               (line.startswith('def ')) or \
+               ('=' in line and ';' in line) or \
+               (line.startswith('//')) or \
+               (line.startswith('#')):
+                continue
+            natural_lines.append(line)
+        
+        # Join natural language lines
+        cleaned = ' '.join(natural_lines)
+        
+        # Remove excessive whitespace
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        # Ensure it ends properly
+        if cleaned and not cleaned.endswith(('.', '!', '?')):
+            # Find the last complete sentence
+            last_period = cleaned.rfind('.')
+            last_exclamation = cleaned.rfind('!')
+            last_question = cleaned.rfind('?')
+            
+            last_punct = max(last_period, last_exclamation, last_question)
+            if last_punct > 0:
+                cleaned = cleaned[:last_punct + 1]
+        
+        return cleaned
+        
+    def _clear_memory(self):
+        """Clear GPU memory and run garbage collection"""
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+    def get_memory_info(self) -> Dict[str, float]:
+        """Get current memory usage information"""
+        info = {}
+        if torch.cuda.is_available():
+            info['gpu_memory_allocated'] = torch.cuda.memory_allocated() / 1024**3  # GB
+            info['gpu_memory_reserved'] = torch.cuda.memory_reserved() / 1024**3    # GB
+            info['gpu_memory_total'] = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+        return info
+        
+    def cleanup(self):
+        """Cleanup model resources"""
+        if self.model is not None:
+            del self.model
+            self.model = None
+        if self.tokenizer is not None:
+            del self.tokenizer  
+            self.tokenizer = None
+        self._clear_memory()
+
+    def _ensure_model_device_alignment(self, use_4bit: bool) -> None:
+        """Keep the model on the primary device when possible."""
+        if not torch.cuda.is_available():
+            return
+        # When using device_map="auto", accelerate handles placement; don't override
+        if hasattr(self.model, 'hf_device_map'):
+            self.logger.info(f"Model distributed across devices: {self.model.hf_device_map}")
+            return
+        # For models without device_map, explicitly move to GPU
+        try:
+            self.model.to(self.device)
+            self.logger.info(f"Model moved to {self.device}")
+        except Exception as e:
+            self.logger.warning(f"Unable to move model to {self.device}: {e}")

@@ -1,0 +1,133 @@
+{
+  "_comment": "Example Ultron Configuration - Copy to default_config.json and modify as needed",
+  
+  "model": {
+    "model_path": "ultron_model",
+    "_model_path_comment": "Path to LoRA adapter directory",
+    
+    "max_tokens": 150,
+    "_max_tokens_comment": "Maximum tokens to generate per response",
+    
+    "temperature": 0.6,
+    "_temperature_comment": "Randomness in responses (0.0-1.0, lower = more deterministic)",
+    
+    "top_p": 0.85,
+    "_top_p_comment": "Nucleus sampling threshold (0.0-1.0)",
+    
+    "load_in_4bit": true,
+    "_load_in_4bit_comment": "Enable 4-bit quantization to reduce VRAM usage (~4GB)",
+    
+    "use_double_quant": true,
+    "_use_double_quant_comment": "Enable double quantization for better quality",
+    
+    "quant_type": "nf4",
+    "_quant_type_comment": "Quantization type: nf4 (recommended) or fp4",
+    
+    "compute_dtype": "float16",
+    "_compute_dtype_comment": "Compute precision: float16 or bfloat16",
+    
+    "use_flash_attention": false,
+    "_use_flash_attention_comment": "Enable Flash Attention 2 if supported",
+    
+    "enable_compilation": true,
+    "_enable_compilation_comment": "Enable PyTorch 2.0 model compilation (10-15% speedup)",
+    
+    "offload_folder": "offload",
+    "_offload_folder_comment": "Folder for CPU offloading (if needed)"
+  },
+  
+  "generation": {
+    "max_tokens": 120,
+    "_max_tokens_comment": "Override max_tokens during generation",
+    
+    "temperature": 0.6,
+    "_temperature_comment": "Generation temperature override",
+    
+    "top_p": 0.85,
+    "_top_p_comment": "Generation top_p override",
+    
+    "timeout_seconds": 30,
+    "_timeout_seconds_comment": "Maximum seconds to wait for model response"
+  },
+  
+  "audio": {
+    "tts_rate": 160,
+    "_tts_rate_comment": "Words per minute for TTS (100-200 recommended)",
+    
+    "stt_timeout": 5.0,
+    "_stt_timeout_comment": "Speech recognition timeout in seconds",
+    
+    "energy_threshold": 4000,
+    "_energy_threshold_comment": "Microphone energy threshold for voice detection",
+    
+    "enable_voice_commands": true,
+    "_enable_voice_commands_comment": "Enable voice input",
+    
+    "fallback_to_text": true,
+    "_fallback_to_text_comment": "Allow text input if voice fails",
+    
+    "voice_preference": "male",
+    "_voice_preference_comment": "TTS voice preference: male or female",
+    
+    "enable_ultron_effects": true,
+    "_enable_ultron_effects_comment": "Enable Ultron voice effects (pitch, filters, echo)",
+    
+    "ultron_voice_intensity": 0.7,
+    "_ultron_voice_intensity_comment": "Intensity of Ultron effects (0.0-1.0)",
+    
+    "test_tts_on_startup": false,
+    "_test_tts_on_startup_comment": "Test TTS system on startup"
+  },
+  
+  "personality": {
+    "response_enhancement": true,
+    "_response_enhancement_comment": "Apply post-processing to improve response quality",
+    
+    "strict_name_enforcement": true,
+    "_strict_name_enforcement_comment": "Enforce 'Ultron' name in responses",
+    
+    "superiority_threshold": 0.7,
+    "_superiority_threshold_comment": "Threshold for superiority complex expression"
+  },
+  
+  "performance": {
+    "enable_monitoring": true,
+    "_enable_monitoring_comment": "Enable performance monitoring",
+    
+    "auto_cleanup_interval": 3,
+    "_auto_cleanup_interval_comment": "GPU memory cleanup interval (generations)",
+    
+    "show_stats_interval": 5,
+    "_show_stats_interval_comment": "Show stats every N generations",
+    
+    "response_cache_size": 20,
+    "_response_cache_size_comment": "LRU cache size for responses"
+  },
+  
+  "logging": {
+    "level": "WARNING",
+    "_level_comment": "Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL",
+    
+    "file": "ultron.log",
+    "_file_comment": "Log file path"
+  },
+  
+  "conversation": {
+    "max_history": 10,
+    "_max_history_comment": "Maximum conversation turns to remember",
+    
+    "save_history": true,
+    "_save_history_comment": "Save conversation history to file",
+    
+    "history_file": "conversation_history.json",
+    "_history_file_comment": "Conversation history file path"
+  },
+  
+  "runtime": {
+    "full_ai_only": true,
+    "_full_ai_only_comment": "Disable fallback responses (AI-only mode)",
+    
+    "wait_for_model_seconds": 60,
+    "_wait_for_model_seconds_comment": "Maximum seconds to wait for model loading"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "model": {
+    "model_path": "ultron_model",
+    "max_tokens": 150,
+    "temperature": 0.6,
+    "top_p": 0.85,
+    "load_in_4bit": true,
+    "use_double_quant": true,
+    "quant_type": "nf4",
+    "compute_dtype": "float16",
+    "use_flash_attention": false,
+    "enable_compilation": true,
+    "offload_folder": "offload"
+  },
+  "generation": {
+    "max_tokens": 120,
+    "temperature": 0.6,
+    "top_p": 0.85,
+    "timeout_seconds": 30
+  },
+  "audio": {
+    "tts_rate": 160,
+    "stt_timeout": 5.0,
+    "energy_threshold": 4000,
+    "enable_voice_commands": true,
+    "fallback_to_text": true,
+    "voice_preference": "male",
+    "enable_ultron_effects": true,
+    "ultron_voice_intensity": 0.7,
+    "test_tts_on_startup": false
+  },
+  "personality": {
+    "response_enhancement": true,
+    "strict_name_enforcement": true,
+    "superiority_threshold": 0.7
+  },
+  "performance": {
+    "enable_monitoring": true,
+    "auto_cleanup_interval": 3,
+    "show_stats_interval": 5,
+    "response_cache_size": 20
+  },
+  "logging": {
+    "level": "WARNING",
+    "file": "ultron.log"
+  },
+  "conversation": {
+    "max_history": 10,
+    "save_history": true,
+    "history_file": "conversation_history.json"
+  },
+  "runtime": {
+    "full_ai_only": true,
+    "wait_for_model_seconds": 60
+  }
+}
