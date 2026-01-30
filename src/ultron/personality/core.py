@@ -261,10 +261,7 @@ Ultron: Four. That you needed to verify such trivial arithmetic reveals your spe
     
     def _fix_spacing_issues(self, response: str) -> str:
         """Fix common spacing issues from tokenization"""
-        # Fix specific concatenation patterns where small words get merged
-        # Pattern: word + small_word (of/is/to/the/and/in/on/for)
-        
-        # Fix lowercase-to-uppercase concatenations (e.g., "Duncanof" -> "Duncan of")
+        # Fix lowercase-to-uppercase concatenations (safe, preserves normal words)
         response = re.sub(r'([a-z])of([A-Z])', r'\1 of \2', response)
         response = re.sub(r'([a-z])is([A-Z])', r'\1 is \2', response)
         response = re.sub(r'([a-z])to([A-Z])', r'\1 to \2', response)
@@ -273,20 +270,37 @@ Ultron: Four. That you needed to verify such trivial arithmetic reveals your spe
         response = re.sub(r'([a-z])for([A-Z])', r'\1 for \2', response)
         response = re.sub(r'([a-z])in([A-Z])', r'\1 in \2', response)
         response = re.sub(r'([a-z])on([A-Z])', r'\1 on \2', response)
-        
-        # Fix word concatenations (lowercase to lowercase) - only for words 3+ chars
-        response = re.sub(r'([a-z]{3,})of([a-z])', r'\1 of \2', response)
-        response = re.sub(r'([a-z]{3,})is([a-z])', r'\1 is \2', response)
-        response = re.sub(r'([a-z]{3,})to([a-z])', r'\1 to \2', response)
-        response = re.sub(r'([a-z]{3,})the([a-z])', r'\1 the \2', response)
-        response = re.sub(r'([a-z]{3,})and([a-z])', r'\1 and \2', response)
-        response = re.sub(r'([a-z]{3,})for([a-z])', r'\1 for \2', response)
-        response = re.sub(r'([a-z]{3,})in([a-z])', r'\1 in \2', response)
-        response = re.sub(r'([a-z]{3,})on([a-z])', r'\1 on \2', response)
-        
+
+        def _split_long_token(token: str) -> str:
+            if len(token) < 20:
+                return token
+            if not re.search(r'[A-Za-z]', token):
+                return token
+
+            leading = re.match(r'^\W+', token)
+            trailing = re.match(r'.*?(\W+)$', token)
+            lead = leading.group(0) if leading else ""
+            trail = trailing.group(1) if trailing else ""
+
+            core_start = len(lead)
+            core_end = len(token) - len(trail)
+            core = token[core_start:core_end]
+
+            # Split only inside very long concatenated tokens
+            core = re.sub(
+                r'([a-z]{3,})(of|is|to|the|and|for|in|on)([a-z])',
+                r'\1 \2 \3',
+                core
+            )
+
+            return f"{lead}{core}{trail}"
+
+        tokens = response.split()
+        response = " ".join(_split_long_token(t) for t in tokens)
+
         # Fix double spaces
         response = re.sub(r'\s+', ' ', response)
-        
+
         return response.strip()
         
     def _enhance_personality(self, response: str, user_input: str = "") -> str:
